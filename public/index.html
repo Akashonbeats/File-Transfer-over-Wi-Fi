@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="style.css">
+    <title>LAN File Transfer</title>
+</head>
+<body>
+
+    <!-- Selection Screen -->
+    <div id="roleSelection">
+        <h1>LAN File Transfer</h1>
+        <button id="sendBtn">Send</button>
+        <button id="receiveBtn">Receive</button>
+    </div>
+
+    <!-- Sender Screen -->
+    <div id="senderScreen" class="hidden">
+        <h1>Select Receiver</h1>
+        <ul id="receiverList"></ul>
+        <form id="uploadForm" enctype="multipart/form-data">
+            <input type="file" name="file" id="fileInput" required>
+            <button type="submit">Upload</button>
+        </form>
+        <div id="progressContainer">
+            <div class="progress-bar">
+                <div id="progressBar" class="progress-bar-inner"></div>
+            </div>
+            <span id="progressText"></span>
+        </div>
+    </div>
+
+    <!-- Receiver Screen -->
+    <div id="receiverScreen" class="hidden">
+        <h1>Waiting for a file to be sent...</h1>
+        <p>Keep this window open.</p>
+        <p id="downloadMessage" class="hidden"></p>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+
+        const roleSelection = document.getElementById('roleSelection');
+        const senderScreen = document.getElementById('senderScreen');
+        const receiverScreen = document.getElementById('receiverScreen');
+
+        const sendBtn = document.getElementById('sendBtn');
+        const receiveBtn = document.getElementById('receiveBtn');
+        const receiverList = document.getElementById('receiverList');
+        const uploadForm = document.getElementById('uploadForm');
+        const fileInput = document.getElementById('fileInput');
+        const progressBar = document.getElementById('progressBar');
+        const progressText = document.getElementById('progressText');
+
+        let selectedReceiver = null;
+
+        // Choose to Send
+        sendBtn.addEventListener('click', () => {
+            roleSelection.classList.add('hidden');
+            senderScreen.classList.remove('hidden');
+            // Fetch receivers on the network
+            socket.emit('request-receivers');
+        });
+
+        // Choose to Receive
+        receiveBtn.addEventListener('click', () => {
+            roleSelection.classList.add('hidden');
+            receiverScreen.classList.remove('hidden');
+            // Notify the server that you're ready to receive files
+            socket.emit('ready-to-receive');
+        });
+
+        // Display available receivers for sender
+        socket.on('receivers-list', (receivers) => {
+            receiverList.innerHTML = '';  // Clear existing list
+            receivers.forEach(receiver => {
+                const li = document.createElement('li');
+                li.textContent = receiver;
+                li.addEventListener('click', () => {
+                    selectedReceiver = receiver;
+                    alert(`Selected receiver: ${receiver}`);
+                });
+                receiverList.appendChild(li);
+            });
+        });
+
+        // Handle File Upload
+        uploadForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            if (!selectedReceiver) {
+                alert('Please select a receiver first.');
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', `/upload?receiver=${selectedReceiver}`, true);
+
+            // Track upload progress
+            xhr.upload.onprogress = (event) => {
+                const percent = Math.round((event.loaded / event.total) * 100);
+                progressBar.style.width = percent + '%';
+                progressText.textContent = percent + '% uploaded';
+
+                // Send progress to receiver
+                socket.emit('upload-progress', { percent, filename: file.name, receiverName: selectedReceiver });
+            };
+
+            // On file upload completion
+            xhr.onload = () => {
+                if (xhr.status === 200) {
+                    progressText.textContent = 'Upload complete!';
+                } else {
+                    progressText.textContent = 'Upload failed.';
+                }
+            };
+
+            xhr.send(formData);
+        });
+
+        // Receive progress updates as a receiver
+        socket.on('receive-progress', (data) => {
+            progressText.textContent = `${data.filename}: ${data.percent}% uploaded`;
+            progressBar.style.width = data.percent + '%';
+        });
+
+        // Receive file ready notification and trigger download
+        socket.on('file-ready', (data) => {
+            const downloadMessage = document.getElementById('downloadMessage');
+            downloadMessage.classList.remove('hidden');
+            downloadMessage.innerHTML = `File "${data.filename}" is ready. Downloading...`;
+
+            // Automatically trigger download
+            const link = document.createElement('a');
+            link.href = data.fileUrl;
+            link.download = data.filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            downloadMessage.innerHTML = `File "${data.filename}" downloaded.`;
+        });
+    </script>
+</body>
+</html>
